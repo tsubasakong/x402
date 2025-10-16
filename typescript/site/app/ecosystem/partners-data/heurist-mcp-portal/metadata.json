@@ -2,7 +2,6 @@
   "name": "Heurist MCP Portal",
   "category": "Ecosystem Infrastructure & Tooling",
   "logoUrl": "/logos/heurist-mesh-agents.png",
-  "description": "Dedicated MCP servers with x402-ready tools for Web3 data and agents.",
+  "description": "Heurist Mesh MCP: 100+ Web3 tools and x402-payable APIs for agent workflows.",
   "websiteUrl": "https://mesh.heurist.xyz"
 }
-
