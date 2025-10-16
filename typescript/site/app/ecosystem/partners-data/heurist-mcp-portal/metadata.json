@@ -1,7 +1,7 @@
 {
-  "name": "Heurist MCP Portal",
+  "name": "Heurist Mesh",
   "category": "Ecosystem Infrastructure & Tooling",
-  "logoUrl": "/logos/heurist-mesh-agents.png",
-  "description": "Heurist Mesh MCP: 100+ Web3 tools and x402-payable APIs for agent workflows.",
-  "websiteUrl": "https://mcp.heurist.ai/"
+  "logoUrl": "/logos/heurist-mesh.png",
+  "description": "Heurist Mesh provides a library of composable crypto skills for any AI agent. Equip your AI with expert crypto analysis abilities, from tracking whale wallets to spotting trending new tokens to analyzing onchain markets with full support for MCP and the X402 payment standard.",
+  "websiteUrl": "https://mesh.heurist.ai/"
 }
