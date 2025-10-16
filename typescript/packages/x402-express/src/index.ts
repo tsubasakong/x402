@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { Address, getAddress } from "viem";
+import { Address as SolanaAddress } from "@solana/kit";
 import { exact } from "x402/schemes";
 import {
   computeRoutePatterns,
@@ -11,14 +12,16 @@ import {
 } from "x402/shared";
 import {
   FacilitatorConfig,
+  ERC20TokenAmount,
   moneySchema,
   PaymentPayload,
   PaymentRequirements,
   PaywallConfig,
-  RequestStructure,
   Resource,
   RoutesConfig,
   settleResponseHeader,
+  SupportedEVMNetworks,
+  SupportedSVMNetworks,
 } from "x402/types";
 import { useFacilitator } from "x402/verify";
 
@@ -70,12 +73,12 @@ import { useFacilitator } from "x402/verify";
  * ```
  */
 export function paymentMiddleware(
-  payTo: Address,
+  payTo: Address | SolanaAddress,
   routes: RoutesConfig,
   facilitator?: FacilitatorConfig,
   paywall?: PaywallConfig,
 ) {
-  const { verify, settle } = useFacilitator(facilitator);
+  const { verify, settle, supported } = useFacilitator(facilitator);
   const x402Version = 1;
 
   // Pre-compile route patterns to regex and extract verbs
@@ -101,6 +104,7 @@ export function paymentMiddleware(
       outputSchema,
       customPaywallHtml,
       resource,
+      discoverable,
     } = config;
 
     const atomicAmountForAsset = processPriceToAtomicAmount(price, network);
@@ -112,24 +116,12 @@ export function paymentMiddleware(
     const resourceUrl: Resource =
       resource || (`${req.protocol}://${req.headers.host}${req.path}` as Resource);
 
-    const input = inputSchema
-      ? ({
-          type: "http",
-          method: req.method.toUpperCase(),
-          ...inputSchema,
-        } as RequestStructure)
-      : undefined;
+    let paymentRequirements: PaymentRequirements[] = [];
 
-    const requestStructure =
-      input || outputSchema
-        ? {
-            input,
-            output: outputSchema,
-          }
-        : undefined;
-
-    const paymentRequirements: PaymentRequirements[] = [
-      {
+    // TODO: create a shared middleware function to build payment requirements
+    // evm networks
+    if (SupportedEVMNetworks.includes(network)) {
+      paymentRequirements.push({
         scheme: "exact",
         network,
         maxAmountRequired,
@@ -140,10 +132,65 @@ export function paymentMiddleware(
         maxTimeoutSeconds: maxTimeoutSeconds ?? 60,
         asset: getAddress(asset.address),
         // TODO: Rename outputSchema to requestStructure
-        outputSchema: requestStructure,
-        extra: asset.eip712,
-      },
-    ];
+        outputSchema: {
+          input: {
+            type: "http",
+            method: req.method.toUpperCase(),
+            discoverable: discoverable ?? true,
+            ...inputSchema,
+          },
+          output: outputSchema,
+        },
+        extra: (asset as ERC20TokenAmount["asset"]).eip712,
+      });
+    }
+
+    // svm networks
+    else if (SupportedSVMNetworks.includes(network)) {
+      // get the supported payments from the facilitator
+      const paymentKinds = await supported();
+
+      // find the payment kind that matches the network and scheme
+      let feePayer: string | undefined;
+      for (const kind of paymentKinds.kinds) {
+        if (kind.network === network && kind.scheme === "exact") {
+          feePayer = kind?.extra?.feePayer;
+          break;
+        }
+      }
+
+      // if no fee payer is found, throw an error
+      if (!feePayer) {
+        throw new Error(`The facilitator did not provide a fee payer for network: ${network}.`);
+      }
+
+      paymentRequirements.push({
+        scheme: "exact",
+        network,
+        maxAmountRequired,
+        resource: resourceUrl,
+        description: description ?? "",
+        mimeType: mimeType ?? "",
+        payTo: payTo,
+        maxTimeoutSeconds: maxTimeoutSeconds ?? 60,
+        asset: asset.address,
+        // TODO: Rename outputSchema to requestStructure
+        outputSchema: {
+          input: {
+            type: "http",
+            method: req.method.toUpperCase(),
+            discoverable: discoverable ?? true,
+            ...inputSchema,
+          },
+          output: outputSchema,
+        },
+        extra: {
+          feePayer,
+        },
+      });
+    } else {
+      throw new Error(`Unsupported network: ${network}`);
+    }
 
     const payment = req.header("X-PAYMENT");
     const userAgent = req.header("User-Agent") || "";
@@ -151,6 +198,7 @@ export function paymentMiddleware(
     const isWebBrowser = acceptHeader.includes("text/html") && userAgent.includes("Mozilla");
 
     if (!payment) {
+      // TODO handle paywall html for solana
       if (isWebBrowser) {
         let displayAmount: number;
         if (typeof price === "string" || typeof price === "number") {
@@ -194,6 +242,7 @@ export function paymentMiddleware(
       decodedPayment = exact.evm.decodePayment(payment);
       decodedPayment.x402Version = x402Version;
     } catch (error) {
+      console.error(error);
       res.status(402).json({
         x402Version,
         error: error || "Invalid or malformed payment header",
@@ -227,6 +276,7 @@ export function paymentMiddleware(
         return;
       }
     } catch (error) {
+      console.error(error);
       res.status(402).json({
         x402Version,
         error,
@@ -266,7 +316,18 @@ export function paymentMiddleware(
       const settleResponse = await settle(decodedPayment, selectedPaymentRequirements);
       const responseHeader = settleResponseHeader(settleResponse);
       res.setHeader("X-PAYMENT-RESPONSE", responseHeader);
+
+      // if the settle fails, return an error
+      if (!settleResponse.success) {
+        res.status(402).json({
+          x402Version,
+          error: settleResponse.errorReason,
+          accepts: toJsonSafe(paymentRequirements),
+        });
+        return;
+      }
     } catch (error) {
+      console.error(error);
       // If settlement fails and the response hasn't been sent yet, return an error
       if (!res.headersSent) {
         res.status(402).json({
@@ -293,3 +354,4 @@ export type {
   RouteConfig,
   RoutesConfig,
 } from "x402/types";
+export type { Address as SolanaAddress } from "@solana/kit";

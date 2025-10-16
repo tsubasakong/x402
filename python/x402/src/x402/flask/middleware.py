@@ -66,6 +66,7 @@ class PaymentMiddleware:
         max_deadline_seconds: int = 60,
         input_schema: Optional[HTTPInputSchema] = None,
         output_schema: Optional[Any] = None,
+        discoverable: Optional[bool] = True,
         facilitator_config: Optional[FacilitatorConfig] = None,
         network: str = "base-sepolia",
         resource: Optional[str] = None,
@@ -84,6 +85,7 @@ class PaymentMiddleware:
             max_deadline_seconds (int, optional): Max time for payment
             input_schema (Optional[HTTPInputSchema], optional): Schema for the request structure. Defaults to None.
             output_schema (Optional[Any], optional): Schema for the response. Defaults to None.
+            discoverable (bool, optional): Whether the route is discoverable. Defaults to True.
             facilitator_config (dict, optional): Facilitator config
             network (str, optional): Network ID
             resource (str, optional): Resource URL
@@ -99,6 +101,7 @@ class PaymentMiddleware:
             "max_deadline_seconds": max_deadline_seconds,
             "input_schema": input_schema,
             "output_schema": output_schema,
+            "discoverable": discoverable,
             "facilitator_config": facilitator_config,
             "network": network,
             "resource": resource,
@@ -149,24 +152,13 @@ class PaymentMiddleware:
                     return next_app(environ, start_response)
 
                 # Get resource URL if not explicitly provided
-                resource_url = config["resource"] or request.url
-
-                # Create input structure if input_schema is provided
-                input_structure = None
-                if config["input_schema"]:
-                    input_structure = {
-                        "type": "http",
-                        "method": request.method.upper(),
-                        **config["input_schema"].model_dump(),
-                    }
-
-                # Create request structure if either input or output is provided
-                request_structure = None
-                if input_structure or config["output_schema"]:
-                    request_structure = {
-                        "input": input_structure,
-                        "output": config["output_schema"],
-                    }
+                original_uri = request.headers.get("X-Original-URI")
+                if original_uri:
+                    # Reconstruct the full URL using the original URI from the proxy
+                    resource_url = f"{request.scheme}://{request.host}{original_uri}"
+                else:
+                    # Fallback to request.url if the header is not present
+                    resource_url = config["resource"] or request.url
 
                 # Construct payment details
                 payment_requirements = [
@@ -181,7 +173,19 @@ class PaymentMiddleware:
                         pay_to=config["pay_to_address"],
                         max_timeout_seconds=config["max_deadline_seconds"],
                         # TODO: Rename output_schema to request_structure
-                        output_schema=request_structure,
+                        output_schema={
+                            "input": {
+                                "type": "http",
+                                "method": request.method.upper(),
+                                "discoverable": config.get("discoverable", True),
+                                **(
+                                    config["input_schema"].model_dump()
+                                    if config["input_schema"]
+                                    else {}
+                                ),
+                            },
+                            "output": config["output_schema"],
+                        },
                         extra=eip712_domain,
                     )
                 ]

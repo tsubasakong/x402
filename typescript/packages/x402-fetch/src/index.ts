@@ -1,5 +1,14 @@
-import { ChainIdToNetwork, PaymentRequirementsSchema, Wallet } from "x402/types";
-import { evm } from "x402/types";
+import {
+  ChainIdToNetwork,
+  PaymentRequirementsSchema,
+  Signer,
+  evm,
+  MultiNetworkSigner,
+  isMultiNetworkSigner,
+  isSvmSignerWallet,
+  Network,
+  X402Config,
+} from "x402/types";
 import {
   createPaymentHeader,
   PaymentRequirementsSelector,
@@ -21,12 +30,18 @@ import {
  * @param walletClient - The wallet client used to sign payment messages
  * @param maxValue - The maximum allowed payment amount in base units (defaults to 0.1 USDC)
  * @param paymentRequirementsSelector - A function that selects the payment requirements from the response
+ * @param config - Optional configuration for X402 operations (e.g., custom RPC URLs)
  * @returns A wrapped fetch function that handles 402 responses automatically
  *
  * @example
  * ```typescript
  * const wallet = new SignerWallet(...);
  * const fetchWithPay = wrapFetchWithPayment(fetch, wallet);
+ *
+ * // With custom RPC configuration
+ * const fetchWithPay = wrapFetchWithPayment(fetch, wallet, undefined, undefined, {
+ *   svmConfig: { rpcUrl: "http://localhost:8899" }
+ * });
  *
  * // Make a request that may require payment
  * const response = await fetchWithPay('https://api.example.com/paid-endpoint');
@@ -39,9 +54,10 @@ import {
  */
 export function wrapFetchWithPayment(
   fetch: typeof globalThis.fetch,
-  walletClient: Wallet,
+  walletClient: Signer | MultiNetworkSigner,
   maxValue: bigint = BigInt(0.1 * 10 ** 6), // Default to 0.10 USDC
   paymentRequirementsSelector: PaymentRequirementsSelector = selectPaymentRequirements,
+  config?: X402Config,
 ) {
   return async (input: RequestInfo, init?: RequestInit) => {
     const response = await fetch(input, init);
@@ -56,10 +72,17 @@ export function wrapFetchWithPayment(
     };
     const parsedPaymentRequirements = accepts.map(x => PaymentRequirementsSchema.parse(x));
 
-    const chainId = evm.isSignerWallet(walletClient) ? walletClient.chain?.id : undefined;
+    const network = isMultiNetworkSigner(walletClient)
+      ? undefined
+      : evm.isSignerWallet(walletClient as typeof evm.EvmSigner)
+        ? ChainIdToNetwork[(walletClient as typeof evm.EvmSigner).chain?.id]
+        : isSvmSignerWallet(walletClient)
+          ? (["solana", "solana-devnet"] as Network[])
+          : undefined;
+
     const selectedPaymentRequirements = paymentRequirementsSelector(
       parsedPaymentRequirements,
-      chainId ? ChainIdToNetwork[chainId] : undefined,
+      network,
       "exact",
     );
 
@@ -71,6 +94,7 @@ export function wrapFetchWithPayment(
       walletClient,
       x402Version,
       selectedPaymentRequirements,
+      config,
     );
 
     if (!init) {
@@ -97,3 +121,6 @@ export function wrapFetchWithPayment(
 }
 
 export { decodeXPaymentResponse } from "x402/shared";
+export { createSigner, type Signer, type MultiNetworkSigner, type X402Config } from "x402/types";
+export { type PaymentRequirementsSelector } from "x402/client";
+export type { Hex } from "viem";
